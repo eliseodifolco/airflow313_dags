@@ -1,3 +1,5 @@
+## REMEMBER TO RESTART THE TRIGGERS FOR 02 AND 010 WHEN READY ##
+
 import re
 import yaml
 import pendulum
@@ -229,15 +231,15 @@ def a03_prod_dag_audimex_source_transform():
         )
         cs.close()
 
-    trigger_a02 = TriggerDagRunOperator(
-        task_id="n_trigger_dag_a02",
-        trigger_dag_id="a02_prod_dag_assurance_dashboard",
-    )
+    # trigger_a02 = TriggerDagRunOperator(
+    #     task_id="n_trigger_dag_a02",
+    #     trigger_dag_id="a02_prod_dag_assurance_dashboard",
+    # )
 
-    trigger_a10 = TriggerDagRunOperator(
-        task_id="n_trigger_dag_a10",
-        trigger_dag_id="a10_prod_call_root_tasks_SWF",
-    )
+    # trigger_a10 = TriggerDagRunOperator(
+    #     task_id="n_trigger_dag_a10",
+    #     trigger_dag_id="a10_prod_call_root_tasks_SWF",
+    # )
 
     # Wiring
     t_manual = update_audit_manual_tree()
@@ -259,8 +261,8 @@ def a03_prod_dag_audimex_source_transform():
         >> t_div_check
         >> t_aud_to_au
         >> t_div_tree
-        >> trigger_a02
-        >> trigger_a10
+        # >> trigger_a02
+        # >> trigger_a10
     )
 
 
