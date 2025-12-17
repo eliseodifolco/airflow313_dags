@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import serialization
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 def get_snowflake_conn():
-    hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
+    hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Sys_Connection")
     return hook.get_conn()
 
 
