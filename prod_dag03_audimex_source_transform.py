@@ -8,15 +8,11 @@ from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Helpers
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 def get_snowflake_cursor():
-    """
-    Returns a Snowflake cursor using the working Airflow connection.
-    Context (DB / schema / warehouse / role) is set explicitly.
-    """
     hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
     conn = hook.get_conn()
     cs = conn.cursor()
@@ -29,7 +25,7 @@ def get_snowflake_cursor():
 
 def load_sql_script(sql_file_name: str) -> str:
     with open(
-        f"/home/adm_difolco_e/airflow/includes/a03_dag_audimex_source_transform/{sql_file_name}",
+        f"/home/adm_difolco_e/air_disk/airflow/includes/a03_dag_audimex_source_transform/{sql_file_name}",
         "r",
     ) as f:
         return re.sub(r"\t|\n", " ", f.read())
@@ -41,9 +37,9 @@ def yaml_to_sql_script(yaml_file_path: str, dict_key: str) -> str:
     return content[dict_key]
 
 
-# ------------------------------------------------------------------------------
-# SQL constants (unchanged)
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# SQL constants
+# --------------------------------------------------------------------------
 
 sql_audmx_division_tree_append = """
 INSERT INTO IA.AUDIMEX_SOURCE.TBL_AUDMX_DIVISION_TREE (cc_sort_order, division, business_unit)
@@ -81,7 +77,6 @@ RIGHT JOIN div
     ON bu.cc_sort_order = LEFT(div.cc_sort_order,9)
 """
 
-
 sql_audmx_auditing_to_au_append = """
 INSERT INTO IA.AUDIMEX_SOURCE.TBL_AUDMX_AUDITING_TO_DIVISION (AUDITING_ID, CC_SORT_ORDER, DIVISION)
 SELECT
@@ -114,7 +109,6 @@ GROUP BY
     division
 """
 
-
 sql_audit_manual_tree_consistency = """
 SELECT sort_order, COUNT(*) AS rowcount
 FROM IA.AUDIMEX_SOURCE.TBL_AUDMX_AUDIT_MANUAL_TREE
@@ -122,10 +116,9 @@ WHERE sort_order IS NOT NULL
 GROUP BY sort_order
 """
 
-
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # DAG
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 @dag(
     dag_id="a03_prod_dag_audimex_source_transform",
@@ -135,10 +128,6 @@ GROUP BY sort_order
     tags=["audimex", "snowflake", "transform"],
 )
 def a03_prod_dag_audimex_source_transform():
-
-    # -------------------------------
-    # Load / transform tasks
-    # -------------------------------
 
     @task
     def update_audit_manual_tree():
@@ -165,7 +154,7 @@ def a03_prod_dag_audimex_source_transform():
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_TREE_ENTITIES")
         cs.execute(
             yaml_to_sql_script(
-                "/home/adm_difolco_e/airflow/includes/a03_dag_audimex_source_transform/sql_tbl_tree_entities_append.yaml",
+                "/home/adm_difolco_e/air_disk/airflow/includes/a03_dag_audimex_source_transform/sql_tbl_tree_entities_append.yaml",
                 "sql_tbl_tree_entities_append",
             )
         )
@@ -177,7 +166,7 @@ def a03_prod_dag_audimex_source_transform():
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_ENTITIES_MASTER_LIST")
         cs.execute(
             yaml_to_sql_script(
-                "/home/adm_difolco_e/airflow/includes/a03_dag_audimex_source_transform/sql_tbl_entities_master_list_append.yaml",
+                "/home/adm_difolco_e/air_disk/airflow/includes/a03_dag_audimex_source_transform/sql_tbl_entities_master_list_append.yaml",
                 "sql_tbl_entities_master_list_append",
             )
         )
@@ -222,7 +211,7 @@ def a03_prod_dag_audimex_source_transform():
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_AUDMX_AUDIT_MANUAL")
         cs.execute(
             yaml_to_sql_script(
-                "/home/adm_difolco_e/airflow/includes/a03_dag_audimex_source_transform/sql_tbl_audmx_audit_manual_append.yaml",
+                "/home/adm_difolco_e/air_disk/airflow/includes/a03_dag_audimex_source_transform/sql_tbl_audmx_audit_manual_append.yaml",
                 "sql_tbl_audmx_audit_manual_append",
             )
         )
@@ -234,15 +223,11 @@ def a03_prod_dag_audimex_source_transform():
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_TREE_FLAT")
         cs.execute(
             yaml_to_sql_script(
-                "/home/adm_difolco_e/airflow/includes/a03_dag_audimex_source_transform/sql_tbl_tree_flat_append.yaml",
+                "/home/adm_difolco_e/air_disk/airflow/includes/a03_dag_audimex_source_transform/sql_tbl_tree_flat_append.yaml",
                 "sql_tbl_tree_flat_append",
             )
         )
         cs.close()
-
-    # -------------------------------
-    # Trigger downstream DAGs
-    # -------------------------------
 
     trigger_a02 = TriggerDagRunOperator(
         task_id="n_trigger_dag_a02",
@@ -254,28 +239,28 @@ def a03_prod_dag_audimex_source_transform():
         trigger_dag_id="a10_prod_call_root_tasks_SWF",
     )
 
-    # -------------------------------
     # Wiring
-    # -------------------------------
-
     t_manual = update_audit_manual_tree()
     t_manual_check = audit_manual_tree_consistency_check()
-
+    t_entities_tree = update_tbl_tree_entities()
+    t_entities_master = update_tbl_entities_master_list()
+    t_manual_tbl = update_tbl_audit_manual()
+    t_flat_tbl = update_tbl_tree_flat()
     t_div_check = audit_division_tree_consistency_check()
     t_aud_to_au = update_tbl_auditing_to_au()
     t_div_tree = update_tbl_division_tree()
 
+    # Logical execution chain
     (
         t_manual
         >> t_manual_check
-        >> trigger_a02
-        >> trigger_a10
-    )
-
-    (
-        t_div_check
+        >> [t_entities_tree, t_entities_master, t_manual_tbl]
+        >> t_flat_tbl
+        >> t_div_check
         >> t_aud_to_au
         >> t_div_tree
+        >> trigger_a02
+        >> trigger_a10
     )
 
 
