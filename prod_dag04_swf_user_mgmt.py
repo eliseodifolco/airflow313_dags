@@ -43,10 +43,9 @@ def run_sql_script_with_id(script):
     sfqid = cs.sfqid  # here the query id is picked up from current status of the cursor
     return sfqid
 
-def sql_script_insert_tbl_swf_users_reader():
-    sfqid = '{{ti.xcom_pull(key="return_value", task_ids="n_show_users_query")}}'
-    sql_code = sql_script_insert_tbl_swf_users.format(query_id=sfqid)
-    return sql_code    
+def sql_script_insert_tbl_swf_users_reader(sfqid: str) -> str:
+    return sql_script_insert_tbl_swf_users.format(query_id=sfqid)
+
 
 ''' "0 20 * * 1-5" means monday to friday at 00.20 '''
 @dag(schedule="15 1 * * 2-6", start_date=pendulum.datetime(2023, 5, 31, tz="CET"),catchup=False)
@@ -62,7 +61,7 @@ def a04_prod_dag_swf_user_mgmt():
 
     
     @task(task_id="n_generate_current_swf_users_table")
-    def generate_current_users_table():
+    def generate_current_users_table(sfqid: str):
         hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Sys_Connection")
         conn = hook.get_conn()
         cursor = conn.cursor()
@@ -76,7 +75,7 @@ def a04_prod_dag_swf_user_mgmt():
         cursor.execute("DELETE FROM IA.SANDBOX_SOURCE.TBL_SWF_USERS WHERE 1=1;")
 
         # Step 2: Insert new rows using the query ID from SHOW USERS
-        sql_insert = sql_script_insert_tbl_swf_users_reader()
+        sql_insert = sql_script_insert_tbl_swf_users_reader(sfqid)
         cursor.execute(sql_insert)
 
         cursor.close()
@@ -147,7 +146,7 @@ def a04_prod_dag_swf_user_mgmt():
                 users_created+=1
         return users_created
     
-    generate_current_users_table = generate_current_users_table()
+    generate_current_users_table = generate_current_users_table(show_users)
     user_create_dictionary = get_users_to_create()
     create_users = user_creation_routine(user_create_dictionary)
 
