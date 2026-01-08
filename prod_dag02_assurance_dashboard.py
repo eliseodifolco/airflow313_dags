@@ -1,162 +1,143 @@
-import json
-from airflow.decorators import dag, task 
-from airflow.utils.dates import days_ago
-from airflow.operators.dummy import DummyOperator
-from airflow.operators.empty import EmptyOperator
-from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
-import snowflake.connector
-import pandas as pd
-import pendulum
-import logging
 import yaml
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.asymmetric import dsa
-from cryptography.hazmat.primitives import serialization
+import pendulum
+import pandas as pd
 
-credentials = json.load(open("/home/adm_difolco_e/airflow/includes/credentials.json"))
+from airflow.decorators import dag, task
+from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 
-pwd_encryption = bytes(credentials["Snowflake"]["key_pwd"], 'utf-8')
+# --------------------------------------------------------------------------
+# Helpers (aligned with dag03)
+# --------------------------------------------------------------------------
 
-#reads the p8 formatted key and decrypts it
-with open("/home/adm_difolco_e/.ssh/rsa_2048_pkcs8.p8", "rb") as key:
-    p_key= serialization.load_pem_private_key(
-        key.read(),
-        password=pwd_encryption,
-        backend=default_backend()
-    )
+def get_snowflake_cursor():
+    hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
+    conn = hook.get_conn()
+    cs = conn.cursor()
+    cs.execute("USE DATABASE IA")
+    cs.execute("USE SCHEMA AUDIMEX_SOURCE")
+    cs.execute("USE WAREHOUSE IA")
+    cs.execute("USE ROLE IA_PIPE_ADMIN")
+    return cs
 
-# transform key in bytes returning it in DER format
-pkb = p_key.private_bytes(
-    encoding=serialization.Encoding.DER,
-    format=serialization.PrivateFormat.PKCS8,
-    encryption_algorithm=serialization.NoEncryption()
-)
 
-cn = snowflake.connector.connect(
-    user='IA_PIPE_ADMIN',
-    account='cm07628.west-europe.azure',
-    private_key=pkb,
-    warehouse='IA',
-    database='IA'
-    )
+def yaml_to_sql_script(yaml_file_path: str, dict_key: str) -> str:
+    """
+    YAML file format:
+      some_key: >
+        SQL CODE ...
+    Returns the SQL string for dict_key.
+    """
+    with open(yaml_file_path) as f:
+        content = yaml.load(f, Loader=yaml.FullLoader)
+    return content[dict_key]
 
-def _run_swf_script(sql_script):
-    cs=cn.cursor()
-    cs.execute(sql_script)
-    sfqid = cs.sfqid
-    return sfqid     
 
-def _yaml_to_sql_script(yaml_file_path,dict_key):
-	'''returns a dictionary with the key name specified in the yaml file which has the following format
-	key: >
-	  sql code
-	a key and a text argument with no newlines is returned'''
-	with open(yaml_file_path) as file:
-		# The FullLoader parameter handles the conversion from YAML
-		# scalar values to Python the dictionary format
-		content = yaml.load(file, Loader=yaml.FullLoader)
-		return content[dict_key]
+# --------------------------------------------------------------------------
+# Paths (match the style used in dag03)
+# --------------------------------------------------------------------------
 
-def get_df_from_query(sql_script):
-    '''from a sql query returns a dictionary of data in tight format to be reused'''
-    cs=cn.cursor()
-    cs.execute(sql_script)
-    df=cs.fetch_pandas_all()
-    data_dict = df.to_dict('tight')
-    return data_dict
+INCLUDES_DIR = "/home/adm_difolco_e/air_disk/airflow/includes/a02_dag_assurance_dashboard"
 
-sql_audit_manual_slicer = '''INSERT INTO IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_MANUAL_SLICER(SORT_ORDER_A, CASCATED_AUDIT_MANUAL)
-SELECT 
-CASE 
-WHEN sort_order_a = ' 243' THEN ' 043'
-WHEN sort_order_a = ' 251' THEN ' 051'
-WHEN sort_order_a = ' 252' THEN ' 252'
-WHEN sort_order_a = ' 452' THEN ' 252'
-WHEN sort_order_a = ' 272' THEN ' 072'
-ELSE sort_order_a
-END,
-CASCATED_AUDIT_MANUAL
+YAML_CORE_TABLE = f"{INCLUDES_DIR}/core_table_query.yaml"
+YAML_AUDIT_CHAPTER = f"{INCLUDES_DIR}/audit_chapter_query.yaml"
+YAML_AUDIT_PROCEDURE = f"{INCLUDES_DIR}/audit_procedure_query.yaml"
+
+
+# --------------------------------------------------------------------------
+# SQL constants (same logic as your dag02)
+# --------------------------------------------------------------------------
+
+SQL_AUDIT_MANUAL_SLICER_APPEND = """
+INSERT INTO IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_MANUAL_SLICER (SORT_ORDER_A, CASCATED_AUDIT_MANUAL)
+SELECT
+    CASE
+        WHEN sort_order_a = ' 243' THEN ' 043'
+        WHEN sort_order_a = ' 251' THEN ' 051'
+        WHEN sort_order_a = ' 252' THEN ' 252'
+        WHEN sort_order_a = ' 452' THEN ' 252'
+        WHEN sort_order_a = ' 272' THEN ' 072'
+        ELSE sort_order_a
+    END,
+    CASCATED_AUDIT_MANUAL
 FROM IA.AUDIMEX_SOURCE.TBL_AUDMX_AUDIT_MANUAL_TREE
 GROUP BY SORT_ORDER_A, CASCATED_AUDIT_MANUAL
-ORDER BY sort_order_a'''
+ORDER BY sort_order_a
+"""
 
-sql_audit_chapter_slicer = _yaml_to_sql_script('/home/adm_difolco_e/airflow/includes/a02_dag_assurance_dashboard/audit_chapter_query.yaml', 'sql_audit_chapter_append')
+SQL_AUDITORS_CONSISTENCY = """
+SELECT a.A_NUMBER, b.firstname, b.lastname, COUNT(*) AS rowcount
+FROM IA.AUDIMEX_SOURCE.AUDITING a
+LEFT JOIN IA.AUDIMEX_SOURCE.AUDITOR b
+    ON a.LEADING_AUDITOR_ID = b.id
+GROUP BY a.A_NUMBER, b.firstname, b.lastname
+ORDER BY rowcount DESC
+"""
 
-sql_audit_procedure_slicer = _yaml_to_sql_script('/home/adm_difolco_e/airflow/includes/a02_dag_assurance_dashboard/audit_procedure_query.yaml', 'sql_audit_procedure_append')
 
-sql_auditors_consistency = '''SELECT a.A_NUMBER ,b.firstname,b.lastname, count(*) as rowcount 
-FROM ia.AUDIMEX_SOURCE.AUDITING a
-LEFT JOIN ia.AUDIMEX_SOURCE.AUDITOR b
-ON a.LEADING_AUDITOR_ID=b.id
-GROUP BY a.A_NUMBER ,b.firstname,b.lastname
-ORDER BY rowcount desc'''
+# --------------------------------------------------------------------------
+# DAG
+# --------------------------------------------------------------------------
 
-@dag(schedule="@daily", start_date=days_ago(1),catchup=False)
+@dag(
+    dag_id="a02_prod_dag_assurance_dashboard",
+    schedule="@daily",
+    start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
+    catchup=False,
+    tags=["assurance", "snowflake", "reports"],
+)
 def a02_prod_dag_assurance_dashboard():
 
-    core_table_load = SnowflakeOperator(
-        task_id='n_update_core_tbl',
-        sql=['DELETE FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_CORE_FACT_TABLE WHERE 1=1',
-             _yaml_to_sql_script('/home/adm_difolco_e/airflow/includes/a02_dag_assurance_dashboard/core_table_query.yaml', 'sql_core_table_append')],
-        snowflake_conn_id='Snowflake_Key_Pair_Connection',
-        warehouse='IA',
-        database='IA',
-        role='IA_PIPE_ADMIN',
-        schema='AUDIMEX_SOURCE',
-        authenticator=None,
-        session_parameters=None,
-        )
+    @task
+    def update_core_tbl():
+        cs = get_snowflake_cursor()
+        cs.execute("DELETE FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_CORE_FACT_TABLE WHERE 1=1")
+        cs.execute(yaml_to_sql_script(YAML_CORE_TABLE, "sql_core_table_append"))
+        cs.close()
 
-    audit_manual_slicer_load = SnowflakeOperator(
-        task_id='n_update_audit_manual_slicer_tbl',
-        sql=['DELETE FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_MANUAL_SLICER WHERE 1=1',
-             sql_audit_manual_slicer],
-        snowflake_conn_id='Snowflake_Key_Pair_Connection',
-        warehouse='IA',
-        database='IA',
-        role='IA_PIPE_ADMIN',
-        schema='AUDIMEX_SOURCE',
-        authenticator=None,
-        session_parameters=None,
-        )
+    @task
+    def update_audit_manual_slicer_tbl():
+        cs = get_snowflake_cursor()
+        cs.execute("DELETE FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_MANUAL_SLICER WHERE 1=1")
+        cs.execute(SQL_AUDIT_MANUAL_SLICER_APPEND)
+        cs.close()
 
-    audit_chapter_slicer_load = SnowflakeOperator(
-        task_id='n_update_audit_chapter_slicer_tbl',
-        sql=['DELETE FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_CHAPTER_SLICER WHERE 1=1',
-             sql_audit_chapter_slicer],
-        snowflake_conn_id='Snowflake_Key_Pair_Connection',
-        warehouse='IA',
-        database='IA',
-        role='IA_PIPE_ADMIN',
-        schema='AUDIMEX_SOURCE',
-        authenticator=None,
-        session_parameters=None,
-        )
+    @task
+    def update_audit_chapter_slicer_tbl():
+        cs = get_snowflake_cursor()
+        cs.execute("DELETE FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_CHAPTER_SLICER WHERE 1=1")
+        cs.execute(yaml_to_sql_script(YAML_AUDIT_CHAPTER, "sql_audit_chapter_append"))
+        cs.close()
 
-    audit_procedure_slicer_load = SnowflakeOperator(
-        task_id='n_update_audit_procedure_slicer_tbl',
-        sql=['DELETE FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_PROCEDURE_SLICER WHERE 1=1',
-             sql_audit_procedure_slicer],
-        snowflake_conn_id='Snowflake_Key_Pair_Connection',
-        warehouse='IA',
-        database='IA',
-        role='IA_PIPE_ADMIN',
-        schema='AUDIMEX_SOURCE',
-        authenticator=None,
-        session_parameters=None,
-        )
+    @task
+    def update_audit_procedure_slicer_tbl():
+        cs = get_snowflake_cursor()
+        cs.execute("DELETE FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_PROCEDURE_SLICER WHERE 1=1")
+        cs.execute(yaml_to_sql_script(YAML_AUDIT_PROCEDURE, "sql_audit_procedure_append"))
+        cs.close()
 
-    @task(task_id="auditor_pandas_analysis")
-    def auditor_consistency_check(sql_code):
-        input_dict= get_df_from_query(sql_code)
-        df = pd.DataFrame.from_dict(input_dict,orient='tight')
-        # returns number of responsible auditors per audit, if >1 then there is a data model consistency issue
-        nr_auditors = df['ROWCOUNT'].max().item()
-        # print(type(nr_auditors))
+    @task
+    def auditor_pandas_analysis():
+        """
+        Returns the max number of responsible auditors per audit.
+        If > 1 then there's a potential data model consistency issue (same as your current intent).
+        """
+        cs = get_snowflake_cursor()
+        cs.execute(SQL_AUDITORS_CONSISTENCY)
+        df = cs.fetch_pandas_all()
+        cs.close()
+
+        nr_auditors = int(df["ROWCOUNT"].max())
         return nr_auditors
 
-    auditor_consistency = auditor_consistency_check(sql_auditors_consistency)
+    # Wiring (same semantics as before: loads + analysis)
+    t_core = update_core_tbl()
+    t_manual = update_audit_manual_slicer_tbl()
+    t_chapter = update_audit_chapter_slicer_tbl()
+    t_proc = update_audit_procedure_slicer_tbl()
+    t_aud_check = auditor_pandas_analysis()
 
-a02_prod_dag_assurance_dashboard()
+    [t_core, t_manual, t_chapter, t_proc] >> t_aud_check
+
+
+dag = a02_prod_dag_assurance_dashboard()
