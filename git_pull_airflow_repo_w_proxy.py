@@ -3,7 +3,7 @@ from airflow.providers.standard.operators.bash import BashOperator
 from datetime import datetime
 
 with DAG(
-    dag_id="dag_git_pull_with_proxy",
+    dag_id="git_pull_with_proxy",
     start_date=datetime(2024, 1, 1),
     schedule=None,
     catchup=False,
