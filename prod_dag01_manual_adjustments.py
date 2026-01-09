@@ -1,34 +1,43 @@
-import json
-from airflow.decorators import dag, task 
-from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
-import snowflake.connector
-import pandas as pd
 import pendulum
-import logging
+from airflow.decorators import dag, task
+from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 
-# NOT NEEDED FOR THE MOMENT BUT USEFUL WHEN ADJUSTMENTS WILL BE MORE NUMEROUS
-def _import_script_from_json(script_name):
-    with open('/home/adm_difolco_e/airflow/includes/a01_dag_audimex_to_snowflake/sql_scripts.json') as json_file:
-        dict = json.load(json_file)
-        return dict[script_name]
-
-
-@dag(schedule=None, start_date=pendulum.datetime(2024, 1, 1, tz="UTC"), catchup=False)
+@dag(
+    dag_id="a01_prod_dag_manual_adjustments",
+    schedule=None,
+    start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
+    catchup=False,
+    tags=["audimex", "manual", "adjustment"],
+)
 def a01_prod_dag_manual_adjustments():
 
-    adjustment_wal_state_log = SnowflakeOperator(
-        task_id='n_wal_state_log_adjustment',
-        sql=['''
-            UPDATE ia.audimex_source.wal_state_log
-            SET CHANGE_DATE = '2023-05-15'
-            WHERE id = 109612
-        '''],
-        snowflake_conn_id='Snowflake_Key_Pair_Connection',
-        warehouse='IA',
-        database='IA',
-        role='IA_PIPE_ADMIN',
-        schema='AUDIMEX_SOURCE',
-    )
+    @task
+    def apply_adjustment():
+        """
+        Performs a manual update on WAL_STATE_LOG table.
+        """
+        hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
+        conn = hook.get_conn()
+        cursor = conn.cursor()
 
-a01_prod_dag_manual_adjustments()
+        # Set context
+        cursor.execute("USE WAREHOUSE IA")
+        cursor.execute("USE ROLE IA_PIPE_ADMIN")
+        cursor.execute("USE DATABASE IA")
+        cursor.execute("USE SCHEMA AUDIMEX_SOURCE")
+
+        # Execute adjustment
+        cursor.execute("""
+            UPDATE WAL_STATE_LOG
+            SET CHANGE_DATE = '2023-05-15'
+            WHERE ID = 109612
+        """)
+
+        cursor.close()
+        print("Manual adjustment applied.")
+
+    apply_adjustment()
+
+
+dag = a01_prod_dag_manual_adjustments()
