@@ -4,6 +4,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.microsoft.azure.hooks.wasb import WasbHook
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from datetime import datetime
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 import os
 import json
 from airflow.exceptions import AirflowException
@@ -19,14 +20,28 @@ default_args = {
     "start_date": datetime(2024, 1, 1),
 }
 
-tbl_name_list = ['activity', 'guideline', 'auditing','wal_state','issue', 'suggestion','auditor','auditee','wal_state_log','wal_user','audit_universe','reserve_sel_issue_00']  # Easily extendable
-schema_name = 'public'
+tbl_name_list = [
+    "activity",
+    "guideline",
+    "auditing",
+    "wal_state",
+    "issue",
+    "suggestion",
+    "auditor",
+    "auditee",
+    "wal_state_log",
+    "wal_user",
+    "audit_universe",
+    "reserve_sel_issue_00",
+    "contains_pu",
+]  # Easily extendable
+schema_name = "public"
 
 
 with DAG(
     dag_id="prod_dag01_audimex_tbls_to_snowflake",
     default_args=default_args,
-    schedule=None,
+    schedule="0 * * * *",  # ← every hour at minute 0,
     catchup=False,
     tags=["audimex", "postgres", "snowflake"],
     description="Extracts metadata and records from Postgres Audimex tables, prepares data for Snowflake load.",
@@ -71,8 +86,14 @@ with DAG(
 
             if dt == "boolean":
                 boolean_fields.append(col_lc)
-            elif dt in ("date", "datetime", "timestamp", "timestamp_ntz",
-                        "timestamp_ltz", "timestamp_tz"):
+            elif dt in (
+                "date",
+                "datetime",
+                "timestamp",
+                "timestamp_ntz",
+                "timestamp_ltz",
+                "timestamp_tz",
+            ):
                 date_fields.append(col_lc)
 
         cursor.close()
@@ -81,10 +102,9 @@ with DAG(
             "columns": columns,
             "types": types,
             "boolean_fields": boolean_fields,
-            "date_fields": date_fields
+            "date_fields": date_fields,
         }
 
-    
     @task
     def a02_bytearray_spotter(field_meta: dict, tbl_name: str):
         """
@@ -98,12 +118,14 @@ with DAG(
         cursor = conn.cursor()
 
         # Get actual columns in Postgres
-        cursor.execute(f"""
+        cursor.execute(
+            f"""
             SELECT column_name, data_type
             FROM information_schema.columns
             WHERE table_schema = 'public'
             AND table_name = '{tbl_name}'
-        """)
+        """
+        )
         pg_columns = {row[0]: row[1] for row in cursor.fetchall()}
         cursor.close()
 
@@ -117,7 +139,7 @@ with DAG(
                 # Column exists in Snowflake but not in Postgres
                 print(f"Mocking missing column: {col_lc}")
                 select_clause.append(f"'' AS {col_lc}")
-            elif pg_columns[col_lc] == 'bytea':
+            elif pg_columns[col_lc] == "bytea":
                 print(f"Skipping BYTEA field: {col_lc}")
                 select_clause.append(f"'' AS {col_lc}")
             else:
@@ -126,7 +148,6 @@ with DAG(
         sql = f'SELECT {", ".join(select_clause)} FROM "public"."{tbl_name}"'
         print(f"\nGenerated SQL:\n{sql}\n")
         return sql
-
 
     @task
     def a03_query_table(sql_query: str, tbl_name: str, sf_meta: dict):
@@ -139,7 +160,9 @@ with DAG(
         import json
         import os
 
-        out_dir = "/home/adm_difolco_e/air_disk/airflow/includes/a01_dag_audimex_to_snowflake"
+        out_dir = (
+            "/home/adm_difolco_e/air_disk/airflow/includes/a01_dag_audimex_to_snowflake"
+        )
         os.makedirs(out_dir, exist_ok=True)
         out_file = f"{out_dir}/{tbl_name}.json"
 
@@ -151,7 +174,11 @@ with DAG(
         bool_fields = sf_meta.get("boolean_fields", [])
         date_fields = sf_meta.get("date_fields", [])
         # Identify numeric fields based on Snowflake types
-        numeric_fields = [col.lower() for col, dtype in zip(sf_meta["columns"], sf_meta["types"]) if dtype in ("number", "int", "integer", "decimal", "numeric")]
+        numeric_fields = [
+            col.lower()
+            for col, dtype in zip(sf_meta["columns"], sf_meta["types"])
+            if dtype in ("number", "int", "integer", "decimal", "numeric")
+        ]
 
         column_names = [desc[0].lower() for desc in cursor.description]
 
@@ -175,8 +202,6 @@ with DAG(
                     if field in row_dict and row_dict[field] is not None:
                         row_dict[field] = str(row_dict[field])[:10]
 
-
-
                 # Replace None with 0 in numeric fields
                 for field in numeric_fields:
                     if field in row_dict and row_dict[field] is None:
@@ -193,9 +218,7 @@ with DAG(
         print(f"Wrote {row_count} rows to {out_file}")
         return out_file
 
-    
-
-    @task(task_id='a04_json_to_parquet_with_transform')
+    @task(task_id="a04_json_to_parquet_with_transform")
     def json_to_parquet_w_transform(json_file_path: str):
         """
         Loads JSON into pandas, transforms content, and writes Parquet
@@ -220,20 +243,22 @@ with DAG(
             if col in df.columns:
                 df[col] = df[col].astype(str).apply(lambda x: cjk_re.sub("", x))
 
-
         print("Mandarin removed (if any)")
 
         # Step 2: Date field normalization (keep format YYYY-MM-DD)
         for col in df.columns:
-            if col.endswith("_date") or col.endswith("_when") or col == "suggested_next_au":
+            if (
+                col.endswith("_date")
+                or col.endswith("_when")
+                or col == "suggested_next_au"
+            ):
                 df[col] = (
                     df[col]
                     .astype(str)
-                    .str.replace("/", "-", regex=False)     # replaces slashes with dashes
-                    .str[:10]                                # ensures string is max 10 characters
-                    .str.replace("--", "", regex=False)      # removes any stray double-dash
+                    .str.replace("/", "-", regex=False)  # replaces slashes with dashes
+                    .str[:10]  # ensures string is max 10 characters
+                    .str.replace("--", "", regex=False)  # removes any stray double-dash
                 )
-
 
         # Step 3: Print detected dtypes
         print("Pandas dtypes (inferred):")
@@ -249,12 +274,18 @@ with DAG(
         # check if any column contains date format yyyy/mm/dd - result at the last lines of the log for each table in task 4
 
         import re
+
         date_pattern_slash = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 
         offending_fields = set()
         for col in df.columns:
             if df[col].dtype == object:
-                if df[col].dropna().apply(lambda x: bool(date_pattern_slash.match(str(x)))).any():
+                if (
+                    df[col]
+                    .dropna()
+                    .apply(lambda x: bool(date_pattern_slash.match(str(x))))
+                    .any()
+                ):
                     offending_fields.add(col)
 
         if offending_fields:
@@ -264,8 +295,6 @@ with DAG(
         else:
             print("\nNo fields with YYYY/MM/DD format found.")
 
-
-
         # Regex pattern for dates in format YYYY/MM/DD
         print("Scanning for values in format YYYY/MM/DD:")
 
@@ -274,7 +303,11 @@ with DAG(
         for col in df.columns:
             if df[col].dtype == object:
                 try:
-                    mask = df[col].astype(str).str.contains(r"\d{4}/\d{2}/\d{2}", regex=True, na=False)
+                    mask = (
+                        df[col]
+                        .astype(str)
+                        .str.contains(r"\d{4}/\d{2}/\d{2}", regex=True, na=False)
+                    )
                     if mask.any():
                         print(f"Found YYYY/MM/DD pattern in column: {col}")
                         offenders.append(col)
@@ -282,16 +315,12 @@ with DAG(
                 except Exception as e:
                     print(f"Error scanning column {col}: {e}")
 
-
-
         # Step 5: Delete JSON
         try:
             os.remove(json_file_path)
             print(f"Deleted JSON: {json_file_path}")
         except Exception as e:
             print(f"Could not delete JSON: {e}")
-
-    
 
     @task(task_id="a05_upload_to_azure_blob")
     def upload_parquet_to_azure(tbl_name: str):
@@ -311,11 +340,10 @@ with DAG(
                 container_name=container_name,
                 blob_name=blob_name,
                 data=f,
-                overwrite=True
+                overwrite=True,
             )
 
         print(f"Uploaded {blob_name} to Azure Blob container '{container_name}'")
-
 
     @task(task_id="a06_load_to_snowflake")
     def load_parquet_to_snowflake(tbl_name: str):
@@ -342,7 +370,7 @@ with DAG(
         hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
         conn = hook.get_conn()
         cursor = conn.cursor()
-        
+
         try:
             print(f"Deleting existing data from table {tbl_name} ...")
             cursor.execute(delete_sql)
@@ -351,7 +379,6 @@ with DAG(
             print(f"Loaded {tbl_name} into Snowflake.")
         finally:
             cursor.close()
-
 
     @task(task_id="a07_cleanup_blob_parquet")
     def delete_parquet_blob(tbl_name: str):
@@ -363,7 +390,9 @@ with DAG(
 
         hook = WasbHook(wasb_conn_id="azure_blob_etlia")
         blob_service_client = hook.get_conn()
-        container_client = blob_service_client.get_container_client(container=container_name)
+        container_client = blob_service_client.get_container_client(
+            container=container_name
+        )
         blob_client = container_client.get_blob_client(blob=blob_name)
 
         if blob_client.exists():
@@ -371,28 +400,39 @@ with DAG(
             print(f"Deleted blob: {blob_name}")
         else:
             print(f"Blob not found, nothing to delete: {blob_name}")
+            
+    trigger_dependent_dag = TriggerDagRunOperator(
+        task_id='n_trigger_manual_adjustments',
+        trigger_dag_id='a01_prod_dag_manual_adjustments',
+        trigger_rule='all_done',
+        wait_for_completion=True
+    )
 
-
-
-    
     # DAG wiring
     # Example test list
-    
 
     for tbl_name in tbl_name_list:
-        meta = a01_snowflake_field_metadata.override(task_id=f"a01_{tbl_name}_meta")(tbl_name)
-        sql = a02_bytearray_spotter.override(task_id=f"a02_{tbl_name}_sql")(meta, tbl_name)
-        json_path = a03_query_table.override(task_id=f"a03_{tbl_name}_query")(sql, tbl_name, meta)
-        parquet = json_to_parquet_w_transform.override(task_id=f"a04_{tbl_name}_to_parquet")(json_path)
-        upload = upload_parquet_to_azure.override(task_id=f"a05_{tbl_name}_upload")(tbl_name)
-        load_swf = load_parquet_to_snowflake.override(task_id=f"a06_{tbl_name}_copy_into")(tbl_name)
-        cleanup = delete_parquet_blob.override(task_id=f"a07_{tbl_name}_cleanup")(tbl_name)
-        meta >> sql >> json_path >> parquet >> upload >> load_swf >> cleanup
+        meta = a01_snowflake_field_metadata.override(task_id=f"a01_{tbl_name}_meta")(
+            tbl_name
+        )
+        sql = a02_bytearray_spotter.override(task_id=f"a02_{tbl_name}_sql")(
+            meta, tbl_name
+        )
+        json_path = a03_query_table.override(task_id=f"a03_{tbl_name}_query")(
+            sql, tbl_name, meta
+        )
+        parquet = json_to_parquet_w_transform.override(
+            task_id=f"a04_{tbl_name}_to_parquet"
+        )(json_path)
+        upload = upload_parquet_to_azure.override(task_id=f"a05_{tbl_name}_upload")(
+            tbl_name
+        )
+        load_swf = load_parquet_to_snowflake.override(
+            task_id=f"a06_{tbl_name}_copy_into"
+        )(tbl_name)
+        cleanup = delete_parquet_blob.override(task_id=f"a07_{tbl_name}_cleanup")(
+            tbl_name
+        )
+        meta >> sql >> json_path >> parquet >> upload >> load_swf >> cleanup >> trigger_dependent_dag
 
-        # json_path = a03_query_table.override(task_id=f"a03_{tbl_name}_query")(sql, tbl_name, meta)
-        # parquet = json_to_parquet_w_transform.override(task_id=f"a04_{tbl_name}_to_parquet")(json_path, meta)
-        # upload = upload_parquet_to_azure.override(task_id=f"a05_{tbl_name}_upload")(tbl_name)
-        # load_swf = load_parquet_to_snowflake.override(task_id=f"a06_{tbl_name}_copy_into")(tbl_name)
-        # cleanup = delete_parquet_blob.override(task_id=f"a07_{tbl_name}_cleanup")(tbl_name)
-
-        # meta >> sql >> json_path >> parquet >> upload >> load_swf >> cleanup
+       
