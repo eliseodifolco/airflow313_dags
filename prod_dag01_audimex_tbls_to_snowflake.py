@@ -39,7 +39,7 @@ schema_name = "public"
 
 
 with DAG(
-    dag_id="prod_dag01_audimex_tbls_to_snowflake",
+    dag_id="a01_prod_dag_audimex_tbls_to_snowflake",
     default_args=default_args,
     schedule="0 * * * *",  # ← every hour at minute 0,
     catchup=False,
