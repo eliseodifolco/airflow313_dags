@@ -13,7 +13,7 @@ with DAG(
 
     @task
     def test_connection():
-        hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Sys_Connection")
+        hook = SnowflakeHook(snowflake_conn_id="SnowflakeAccountadminForAirflowUser")
         conn = hook.get_conn()
         cursor = conn.cursor()
         cursor.execute(

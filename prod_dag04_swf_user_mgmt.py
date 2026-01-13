@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import serialization
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 def get_snowflake_conn():
-    hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
+    hook = SnowflakeHook(snowflake_conn_id="SnowflakeAccountadminForAirflowUser")
     return hook.get_conn()
 
 
@@ -62,7 +62,7 @@ def a04_prod_dag_swf_user_mgmt():
     
     @task(task_id="n_generate_current_swf_users_table")
     def generate_current_users_table(sfqid: str):
-        hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
+        hook = SnowflakeHook(snowflake_conn_id="SnowflakeAccountadminForAirflowUser")
         conn = hook.get_conn()
         cursor = conn.cursor()
         
