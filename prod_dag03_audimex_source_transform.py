@@ -124,7 +124,7 @@ GROUP BY sort_order
 
 @dag(
     dag_id="a03_prod_dag_audimex_source_transform",
-    schedule="10 1 * * *",
+    schedule="10 * * * *",
     start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
     catchup=False,
     tags=["audimex", "snowflake", "transform"],
