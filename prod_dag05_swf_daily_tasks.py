@@ -1,7 +1,7 @@
 import json
 from airflow.decorators import dag, task
 from airflow import AirflowException
-from airflow.utils.dates import days_ago
+import pendulum
 from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.models.xcom_arg import XComArg
@@ -72,7 +72,7 @@ removed_tasks = ["PBIREP_AUDIT_FINDING_STATUS_CORE_FACT_TABLE_DELETE",
 "PBIREP_AUDIT_FINDING_STATUS_TBLDUEDATE_DELETE",
 "PBIREP_AUDIT_FINDING_STATUS_TBLDUEDATE_INSERT",]
 
-@dag(schedule="30 6 * * *", start_date=days_ago(1),catchup=False)
+@dag(schedule="30 6 * * *", start_date=pendulum.datetime(2023, 5, 31, tz="CET"),catchup=False)
 def a05_prod_dag_swf_daily_tasks_control():
 
     '''eventually I preferred to use a list from the file in pbi, where execution order is checked
