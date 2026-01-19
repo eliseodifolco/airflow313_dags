@@ -6,7 +6,7 @@ import pendulum
 @dag(
     dag_id="a09_prod_dag_audimex_audit_status_dashboard",
     start_date=pendulum.datetime(2024, 1, 1, tz="Europe/Rome"),
-    schedule="0 6 * * *",  # Every day at 06:00
+    schedule="20 * * * *",  # Every hour at minute 20
     catchup=False,
     tags=["audimex", "snowflake", "dashboard"],
 )
