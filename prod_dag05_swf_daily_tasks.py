@@ -51,7 +51,7 @@ def get_df_from_query(sql_script: str, file_name: str):
     cs.close()
 
 @dag(
-    schedule="30 6 * * *",  # Daily at 06:30
+    schedule="10 * * * *",  # Daily at 06:30
     start_date=pendulum.datetime(2023, 5, 31, tz="CET"),
     catchup=False,
     tags=["swf", "snowflake", "task_control"]
