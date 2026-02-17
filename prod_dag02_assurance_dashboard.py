@@ -81,7 +81,7 @@ ORDER BY rowcount DESC
 
 @dag(
     dag_id="a02_prod_dag_assurance_dashboard",
-    schedule="@daily",
+    schedule="20 * * * *",
     start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
     catchup=False,
     tags=["assurance", "snowflake", "reports"],
