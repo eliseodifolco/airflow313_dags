@@ -32,7 +32,7 @@ with DAG(
             FILE_FORMAT = (
                 TYPE = CSV
                 FIELD_OPTIONALLY_ENCLOSED_BY = '\"'
-                SKIP_HEADER = 1
+                PARSE_HEADER = TRUE
             )
             PATTERN = 'CIMS\\.csv.*'
             MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
