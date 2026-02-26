@@ -11,25 +11,46 @@ import pendulum
     tags=["audimex", "snowflake", "dashboard"],
 )
 def a09_prod_dag_audimex_audit_status_dashboard():
-    
-    @task(task_id="run_swf_data_model_proc")
-    def run_stored_procedure():
+
+    @task(task_id="refresh_audimex_status_input")
+    def refresh_status_input():
         """
-        Calls the stored procedure that refreshes the audit status model in Snowflake.
+        Refreshes IA.AUDIMEX_SOURCE.TBL_AUDMX_AUDIT_STATUS_INPUT.
         """
         hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
         conn = hook.get_conn()
         cursor = conn.cursor()
 
         try:
-            print("Calling Snowflake stored procedure...")
+            print("Calling source refresh procedure...")
             cursor.execute("""
-                CALL IA.PUBLIC_REPORTS.PROC_TBL_PBIREP_AUDIT_STATUS_COREFACTTABLE_TBLDUEDATE_UPDATE()
+                CALL IA.AUDIMEX_SOURCE.PROC_REFRESH_TBL_AUDMX_AUDIT_STATUS_INPUT()
             """)
-            print("Procedure executed successfully.")
+            print("Source refresh procedure executed successfully.")
         finally:
             cursor.close()
 
-    run_stored_procedure()
+    @task(task_id="refresh_audit_status_reporting_tables")
+    def refresh_reporting_tables():
+        """
+        Refreshes CORE_FACT_TABLE and TBLDUEDATE in IA.PUBLIC_REPORTS.
+        """
+        hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
+        conn = hook.get_conn()
+        cursor = conn.cursor()
+
+        try:
+            print("Calling reporting model refresh procedure...")
+            cursor.execute("""
+                CALL IA.PUBLIC_REPORTS.PROC_TBL_PBIREP_AUDIT_STATUS_COREFACTTABLE_TBLDUEDATE_UPDATE()
+            """)
+            print("Reporting model refresh procedure executed successfully.")
+        finally:
+            cursor.close()
+
+    t_refresh_input = refresh_status_input()
+    t_refresh_reporting = refresh_reporting_tables()
+
+    t_refresh_input >> t_refresh_reporting
 
 dag = a09_prod_dag_audimex_audit_status_dashboard()
