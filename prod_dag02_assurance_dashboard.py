@@ -58,11 +58,20 @@ SELECT
         WHEN sort_order_a = ' 452' THEN ' 252'
         WHEN sort_order_a = ' 272' THEN ' 072'
         ELSE sort_order_a
-    END,
+    END AS mapped_sort_order,
     CASCATED_AUDIT_MANUAL
 FROM IA.AUDIMEX_SOURCE.TBL_AUDMX_AUDIT_MANUAL_TREE
-GROUP BY SORT_ORDER_A, CASCATED_AUDIT_MANUAL
-ORDER BY sort_order_a
+GROUP BY
+    CASE
+        WHEN sort_order_a = ' 243' THEN ' 043'
+        WHEN sort_order_a = ' 251' THEN ' 051'
+        WHEN sort_order_a = ' 252' THEN ' 252'
+        WHEN sort_order_a = ' 452' THEN ' 252'
+        WHEN sort_order_a = ' 272' THEN ' 072'
+        ELSE sort_order_a
+    END,
+    CASCATED_AUDIT_MANUAL
+ORDER BY mapped_sort_order
 """
 
 SQL_AUDITORS_CONSISTENCY = """
@@ -141,3 +150,4 @@ def a02_prod_dag_assurance_dashboard():
 
 
 dag = a02_prod_dag_assurance_dashboard()
+
