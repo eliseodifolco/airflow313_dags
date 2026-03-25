@@ -3,6 +3,7 @@ import pendulum
 import pandas as pd
 
 from airflow.decorators import dag, task
+from airflow.exceptions import AirflowException
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 
@@ -83,6 +84,17 @@ GROUP BY a.A_NUMBER, b.firstname, b.lastname
 ORDER BY rowcount DESC
 """
 
+SQL_AUDIT_MANUAL_SLICER_DUPLICATES = """
+SELECT
+    SORT_ORDER_A,
+    CASCATED_AUDIT_MANUAL,
+    COUNT(*) AS rowcount
+FROM IA.PUBLIC_REPORTS.PBIREP_ASSURANCE_AUDIT_MANUAL_SLICER
+GROUP BY SORT_ORDER_A, CASCATED_AUDIT_MANUAL
+HAVING COUNT(*) > 1
+ORDER BY rowcount DESC, SORT_ORDER_A, CASCATED_AUDIT_MANUAL
+"""
+
 
 # --------------------------------------------------------------------------
 # DAG
@@ -139,15 +151,35 @@ def a02_prod_dag_assurance_dashboard():
         nr_auditors = int(df["ROWCOUNT"].max())
         return nr_auditors
 
+    @task
+    def audit_manual_slicer_uniqueness_check():
+        cs = get_snowflake_cursor()
+        cs.execute(SQL_AUDIT_MANUAL_SLICER_DUPLICATES)
+        df = cs.fetch_pandas_all()
+        cs.close()
+
+        if not df.empty:
+            duplicate_count = len(df)
+            sample_rows = df.head(10).to_dict("records")
+            raise AirflowException(
+                f"Duplicate rows found in PBIREP_ASSURANCE_AUDIT_MANUAL_SLICER. "
+                f"Duplicate groups: {duplicate_count}. Sample: {sample_rows}"
+            )
+
+        return "PBIREP_ASSURANCE_AUDIT_MANUAL_SLICER uniqueness check passed"
+
     # Wiring (same semantics as before: loads + analysis)
     t_core = update_core_tbl()
     t_manual = update_audit_manual_slicer_tbl()
     t_chapter = update_audit_chapter_slicer_tbl()
     t_proc = update_audit_procedure_slicer_tbl()
     t_aud_check = auditor_pandas_analysis()
+    t_manual_unique = audit_manual_slicer_uniqueness_check()
 
     [t_core, t_manual, t_chapter, t_proc] >> t_aud_check
+    t_manual >> t_manual_unique
 
 
 dag = a02_prod_dag_assurance_dashboard()
+
 
