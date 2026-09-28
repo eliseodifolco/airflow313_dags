@@ -35,7 +35,9 @@ tbl_name_list = [
     "reserve_sel_issue_00",
     "contains_pu",
     "abstract_guideline",
-    "audit_concept"
+    "audit_concept",
+    "audit_uni_type",
+    "user_to_au"
 ]  # Easily extendable
 schema_name = "public"
 
