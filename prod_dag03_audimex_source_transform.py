@@ -8,6 +8,7 @@ import pandas as pd
 from airflow.decorators import dag, task
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+from airflow.utils.trigger_rule import TriggerRule
 
 
 # --------------------------------------------------------------------------
@@ -138,7 +139,7 @@ def a03_prod_dag_audimex_source_transform():
         cs.execute(load_sql_script("sql_audit_manual_tree_append.txt"))
         cs.close()
 
-    @task
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def audit_manual_tree_consistency_check():
         cs = get_snowflake_cursor()
         cs.execute(sql_audit_manual_tree_consistency)
@@ -150,7 +151,7 @@ def a03_prod_dag_audimex_source_transform():
         else:
             raise Exception("Audit manual tree model inconsistency detected")
 
-    @task
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def update_tbl_tree_entities():
         cs = get_snowflake_cursor()
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_TREE_ENTITIES")
@@ -162,7 +163,7 @@ def a03_prod_dag_audimex_source_transform():
         )
         cs.close()
 
-    @task
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def update_tbl_entities_master_list():
         cs = get_snowflake_cursor()
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_ENTITIES_MASTER_LIST")
@@ -174,21 +175,21 @@ def a03_prod_dag_audimex_source_transform():
         )
         cs.close()
 
-    @task
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def update_tbl_auditing_to_au():
         cs = get_snowflake_cursor()
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_AUDMX_AUDITING_TO_DIVISION")
         cs.execute(sql_audmx_auditing_to_au_append)
         cs.close()
 
-    @task
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def update_tbl_division_tree():
         cs = get_snowflake_cursor()
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_AUDMX_DIVISION_TREE")
         cs.execute(sql_audmx_division_tree_append)
         cs.close()
 
-    @task
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def audit_division_tree_consistency_check():
         cs = get_snowflake_cursor()
         cs.execute(
@@ -207,7 +208,7 @@ def a03_prod_dag_audimex_source_transform():
 
         print("Division tree model is consistent")
 
-    @task
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def update_tbl_audit_manual():
         cs = get_snowflake_cursor()
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_AUDMX_AUDIT_MANUAL")
@@ -219,7 +220,7 @@ def a03_prod_dag_audimex_source_transform():
         )
         cs.close()
 
-    @task
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def update_tbl_tree_flat():
         cs = get_snowflake_cursor()
         cs.execute("DELETE FROM IA.AUDIMEX_SOURCE.TBL_TREE_FLAT")
@@ -230,6 +231,15 @@ def a03_prod_dag_audimex_source_transform():
             )
         )
         cs.close()
+
+    @task(trigger_rule=TriggerRule.ONE_FAILED)
+    def failure_detected():
+        return True
+
+    @task(trigger_rule=TriggerRule.ALL_DONE)
+    def complete_dag(failed: bool | None):
+        if failed:
+            raise Exception("One or more intermediate tasks failed")
 
     # trigger_a02 = TriggerDagRunOperator(
     #     task_id="n_trigger_dag_a02",
@@ -251,6 +261,8 @@ def a03_prod_dag_audimex_source_transform():
     t_div_check = audit_division_tree_consistency_check()
     t_aud_to_au = update_tbl_auditing_to_au()
     t_div_tree = update_tbl_division_tree()
+    t_failure_detected = failure_detected()
+    t_complete = complete_dag(t_failure_detected)
 
     # Logical execution chain
     (
@@ -264,6 +276,20 @@ def a03_prod_dag_audimex_source_transform():
         # >> trigger_a02
         # >> trigger_a10
     )
+
+    for upstream_task in (
+        t_manual,
+        t_manual_check,
+        t_entities_tree,
+        t_entities_master,
+        t_manual_tbl,
+        t_flat_tbl,
+        t_div_check,
+        t_aud_to_au,
+        t_div_tree,
+    ):
+        upstream_task >> t_failure_detected
+        upstream_task >> t_complete
 
 
 dag = a03_prod_dag_audimex_source_transform()
