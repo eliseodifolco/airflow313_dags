@@ -15,7 +15,7 @@ def a01_prod_dag_manual_adjustments():
     @task
     def apply_adjustment():
         """
-        Performs a manual update on WAL_STATE_LOG table.
+        Performs required post-import source-table adjustments.
         """
         hook = SnowflakeHook(snowflake_conn_id="Snowflake_Key_Pair_Connection")
         conn = hook.get_conn()
@@ -32,6 +32,20 @@ def a01_prod_dag_manual_adjustments():
             UPDATE WAL_STATE_LOG
             SET CHANGE_DATE = '2023-05-15'
             WHERE ID = 109612
+        """)
+
+        # Keep one procedure definition per sort order for the audit-manual tree.
+        cursor.execute("""
+            DELETE FROM ABSTRACT_GUIDELINE
+            WHERE ID IN (
+                SELECT ID
+                FROM ABSTRACT_GUIDELINE
+                WHERE SORT_ORDER IS NOT NULL
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY SORT_ORDER
+                    ORDER BY ID DESC
+                ) > 1
+            )
         """)
 
         cursor.close()
