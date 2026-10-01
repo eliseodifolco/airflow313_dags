@@ -36,16 +36,11 @@ def a01_prod_dag_manual_adjustments():
 
         # Keep one procedure definition per sort order for the audit-manual tree.
         cursor.execute("""
-            DELETE FROM ABSTRACT_GUIDELINE
-            WHERE ID IN (
-                SELECT ID
-                FROM ABSTRACT_GUIDELINE
-                WHERE SORT_ORDER IS NOT NULL
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY SORT_ORDER
-                    ORDER BY ID DESC
-                ) > 1
-            )
+            DELETE FROM ABSTRACT_GUIDELINE AS target
+            USING ABSTRACT_GUIDELINE AS newer
+            WHERE target.SORT_ORDER = newer.SORT_ORDER
+              AND target.SORT_ORDER IS NOT NULL
+              AND target.ID < newer.ID
         """)
 
         cursor.close()
